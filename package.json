@@ -1,0 +1,9 @@
+{
+  "name": "delivery-agent-management-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Delivery Agent Management System",
+  "scripts": {
+    "dev:backend": "npm run dev --prefix backend"
+  }
+}
