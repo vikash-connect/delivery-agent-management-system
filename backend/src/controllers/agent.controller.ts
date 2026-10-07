@@ -26,6 +26,7 @@ export class AgentController {
         success: true,
         data: result.agents,
         pagination: result.pagination,
+        cached: result.cached,
       });
     } catch (error) {
       next(error);

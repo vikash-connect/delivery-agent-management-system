@@ -1,4 +1,5 @@
 import prisma from '../config/db';
+import { cacheService } from './cache.service';
 import { CreateAgentInput, UpdateAgentInput, QueryAgentInput } from '../validators/agent.validator';
 import { AppError } from '../middleware/error.middleware';
 
@@ -19,7 +20,7 @@ export class AgentService {
       throw new AppError('Delivery agent with this email already exists', 409);
     }
 
-    return await prisma.deliveryAgent.create({
+    const newAgent = await prisma.deliveryAgent.create({
       data: {
         fullName: data.fullName,
         phoneNumber: data.phoneNumber,
@@ -28,12 +29,28 @@ export class AgentService {
         status: data.status,
       },
     });
+
+    // Invalidate list caches after creation
+    await cacheService.invalidateAgentCache();
+
+    return newAgent;
   }
 
   async getAgents(query: QueryAgentInput) {
+    const cacheKey = cacheService.generateListCacheKey(query);
+
+    // Try reading from Redis Cache
+    const cachedResult = await cacheService.get<any>(cacheKey);
+    if (cachedResult) {
+      return {
+        ...cachedResult,
+        cached: true,
+      };
+    }
+
+    // Cache MISS: Query PostgreSQL DB
     const { page, limit, status, serviceArea, search } = query;
     const skip = (page - 1) * limit;
-
     const where: any = {};
 
     if (status) {
@@ -68,7 +85,7 @@ export class AgentService {
 
     const totalPages = Math.ceil(totalItems / limit) || 1;
 
-    return {
+    const result = {
       agents,
       pagination: {
         page,
@@ -79,9 +96,26 @@ export class AgentService {
         hasPrevPage: page > 1,
       },
     };
+
+    // Save to Redis Cache
+    await cacheService.set(cacheKey, result);
+
+    return {
+      ...result,
+      cached: false,
+    };
   }
 
   async getAgentById(id: string) {
+    const cacheKey = cacheService.generateAgentCacheKey(id);
+
+    // Try reading from Redis Cache
+    const cachedAgent = await cacheService.get<any>(cacheKey);
+    if (cachedAgent) {
+      return cachedAgent;
+    }
+
+    // Cache MISS: Query PostgreSQL DB
     const agent = await prisma.deliveryAgent.findUnique({
       where: { id },
     });
@@ -89,6 +123,9 @@ export class AgentService {
     if (!agent) {
       throw new AppError('Delivery agent not found', 404);
     }
+
+    // Save to Redis Cache
+    await cacheService.set(cacheKey, agent);
 
     return agent;
   }
@@ -122,10 +159,15 @@ export class AgentService {
       }
     }
 
-    return await prisma.deliveryAgent.update({
+    const updatedAgent = await prisma.deliveryAgent.update({
       where: { id },
       data,
     });
+
+    // Invalidate cached single agent & list queries
+    await cacheService.invalidateAgentCache(id);
+
+    return updatedAgent;
   }
 
   async deleteAgent(id: string) {
@@ -139,6 +181,9 @@ export class AgentService {
     await prisma.deliveryAgent.delete({
       where: { id },
     });
+
+    // Invalidate cached single agent & list queries
+    await cacheService.invalidateAgentCache(id);
   }
 }
 
